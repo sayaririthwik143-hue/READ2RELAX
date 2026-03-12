@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { Component, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   LayoutDashboard, 
@@ -28,13 +28,139 @@ import {
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { ExerciseDetector } from './components/ExerciseDetector';
 import { MOCK_APPS, QUOTES, type User, cn } from './utils';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  onSnapshot,
+  type FirebaseUser
+} from './firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorInfo: string | null;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public state: ErrorBoundaryState;
+  public props: ErrorBoundaryProps;
+
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorInfo: error.message };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let displayMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.errorInfo || "");
+        if (parsed.error && parsed.error.includes("insufficient permissions")) {
+          displayMessage = "You don't have permission to perform this action. Please check your account settings.";
+        }
+      } catch (e) {
+        // Not a JSON error
+      }
+
+      return (
+        <div className="h-screen flex flex-col items-center justify-center p-8 text-center bg-zinc-50">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+            <AlertTriangle className="text-red-600" size={32} />
+          </div>
+          <h2 className="text-2xl font-black text-zinc-900 mb-2">Application Error</h2>
+          <p className="text-zinc-500 mb-6 font-medium">{displayMessage}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-zinc-900 text-white rounded-xl font-bold"
+          >
+            Reload App
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 type Screen = 'splash' | 'auth' | 'permissions' | 'gender-selection' | 'app-selection' | 'home' | 'stats' | 'relax' | 'profile' | 'blocking';
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
   const [showExercise, setShowExercise] = useState<'pushups' | 'situps' | null>(null);
   const [selectedApps, setSelectedApps] = useState<string[]>([]);
@@ -42,15 +168,74 @@ export default function App() {
   const [limit, setLimit] = useState(30);
   const [isBlocked, setIsBlocked] = useState(false);
   const [cameraGranted, setCameraGranted] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
-  // Auth Logic
+  // Auth Listener
   useEffect(() => {
-    if (token) {
-      fetchProfile();
-    } else {
-      setTimeout(() => setCurrentScreen('permissions'), 2500);
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setIsAuthReady(true);
+      if (firebaseUser) {
+        // User is signed in, fetch/sync their data
+        syncUserData(firebaseUser);
+      } else {
+        setUser(null);
+        if (currentScreen !== 'splash' && currentScreen !== 'permissions' && currentScreen !== 'gender-selection' && currentScreen !== 'app-selection') {
+          setCurrentScreen('auth');
+        }
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Splash Screen Delay
+  useEffect(() => {
+    if (currentScreen === 'splash') {
+      const timer = setTimeout(() => {
+        if (isAuthReady) {
+          if (auth.currentUser) {
+            setCurrentScreen('home');
+          } else {
+            setCurrentScreen('permissions');
+          }
+        }
+      }, 2500);
+      return () => clearTimeout(timer);
     }
-  }, [token]);
+  }, [isAuthReady, currentScreen]);
+
+  // Sync User Data with Firestore
+  const syncUserData = (firebaseUser: FirebaseUser) => {
+    const userDocRef = doc(db, 'users', firebaseUser.uid);
+    
+    // Set up real-time listener
+    const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as User;
+        setUser(data);
+        try {
+          setSelectedApps(JSON.parse(data.selected_apps));
+        } catch (e) {
+          setSelectedApps([]);
+        }
+        setLimit(data.screen_time_limit);
+        
+        // If we are on onboarding screens, move to home
+        if (['auth', 'permissions', 'gender-selection', 'app-selection'].includes(currentScreen)) {
+          setCurrentScreen('home');
+        }
+      } else {
+        // New user, we'll handle creation after onboarding
+        if (currentScreen === 'splash' || currentScreen === 'auth') {
+          setCurrentScreen('permissions');
+        }
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+    });
+
+    return unsubscribe;
+  };
 
   // Automatic Blocking
   useEffect(() => {
@@ -59,78 +244,64 @@ export default function App() {
     }
   }, [user?.daily_usage, user?.screen_time_limit]);
 
-  const fetchProfile = async () => {
+  const handleGoogleLogin = async () => {
     try {
-      const res = await fetch('/api/user/profile', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data);
-        setSelectedApps(JSON.parse(data.selected_apps));
-        setLimit(data.screen_time_limit);
-        setCurrentScreen('home');
-      } else {
-        setToken(null);
-        localStorage.removeItem('token');
-        setCurrentScreen('auth');
-      }
+      await signInWithPopup(auth, googleProvider);
     } catch (err) {
       console.error(err);
-    } finally {
-      setLoading(false);
+      alert("Failed to sign in with Google.");
     }
   };
 
-  const handleAuth = async (type: 'login' | 'signup', payload: any) => {
-    try {
-      // For signup, include the onboarding data
-      const body = type === 'signup' 
-        ? { ...payload, selected_apps: JSON.stringify(selectedApps), screen_time_limit: limit, gender }
-        : payload;
+  const handleOnboardingContinue = () => {
+    if (!gender) {
+      alert("Please select your gender.");
+      return;
+    }
+    setCurrentScreen('app-selection');
+  };
 
-      const res = await fetch(`/api/auth/${type}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setToken(data.token);
-        localStorage.setItem('token', data.token);
-        setUser(data.user);
-        setCurrentScreen('home');
-      } else {
-        alert(data.error);
-      }
+  const finalizeOnboarding = async () => {
+    if (!auth.currentUser) {
+      setCurrentScreen('auth');
+      return;
+    }
+    
+    const newUser: User = {
+      id: 0, // Not used with Firebase
+      uid: auth.currentUser.uid,
+      name: auth.currentUser.displayName || 'User',
+      email: auth.currentUser.email || '',
+      profile_photo: auth.currentUser.photoURL || null,
+      selected_apps: JSON.stringify(selectedApps),
+      screen_time_limit: limit,
+      exercise_minutes_earned: 0,
+      daily_usage: 0,
+      focus_score: 100,
+      gender: gender,
+    };
+
+    try {
+      await setDoc(doc(db, 'users', auth.currentUser.uid), newUser);
+      setCurrentScreen('home');
     } catch (err) {
-      console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, `users/${auth.currentUser.uid}`);
     }
   };
 
   const updateUserData = async (updates: Partial<User>) => {
-    if (user) {
-      setUser({ ...user, ...updates }); // Optimistic update
-    }
+    if (!auth.currentUser) return;
+    
     try {
-      await fetch('/api/user/update', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(updates)
-      });
-      fetchProfile();
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), updates);
     } catch (err) {
-      console.error(err);
+      handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
     }
   };
 
   // Exercise Completion
   const onExerciseComplete = (minutes: number) => {
-    if (user) {
-      // Add earned minutes to the limit and reduce usage
+    if (user && auth.currentUser) {
       updateUserData({
         exercise_minutes_earned: user.exercise_minutes_earned + minutes,
         screen_time_limit: user.screen_time_limit + minutes,
@@ -171,10 +342,6 @@ export default function App() {
         </div>
       </div>
     );
-  }
-
-  if (currentScreen === 'auth') {
-    return <AuthScreen onAuth={handleAuth} />;
   }
 
   if (currentScreen === 'permissions') {
@@ -288,13 +455,7 @@ export default function App() {
           </div>
         </div>
         <button 
-          onClick={() => {
-            if (!gender) {
-              alert("Please select your gender.");
-              return;
-            }
-            setCurrentScreen('app-selection');
-          }}
+          onClick={handleOnboardingContinue}
           className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl"
         >
           Continue
@@ -349,24 +510,44 @@ export default function App() {
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => {
-            if (selectedApps.length === 0) {
-              alert("Please select at least one app.");
-              return;
-            }
-            setCurrentScreen('auth');
-          }}
+          <button 
+          onClick={finalizeOnboarding}
           className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl mt-6"
         >
-          Continue to Login
+          {auth.currentUser ? "Complete Setup" : "Continue to Login"}
         </button>
       </div>
     );
   }
 
-  return (
-    <div className="h-screen bg-zinc-50 flex flex-col overflow-hidden">
+    if (currentScreen === 'auth') {
+      return (
+        <div className="h-screen bg-white p-8 flex flex-col justify-center items-center text-center">
+          <div className="mb-12">
+            <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-100 mb-6 mx-auto">
+              <Smartphone className="text-white w-10 h-10" />
+            </div>
+            <h2 className="text-4xl font-black text-zinc-900 mb-2">Welcome</h2>
+            <p className="text-zinc-500 font-medium">Join the Read2Relax community.</p>
+          </div>
+
+          <button 
+            onClick={handleGoogleLogin}
+            className="w-full flex items-center justify-center gap-4 bg-white border-2 border-zinc-100 p-4 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm"
+          >
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
+            Continue with Google
+          </button>
+
+          <p className="mt-8 text-zinc-400 text-xs font-medium px-8 leading-relaxed">
+            By continuing, you agree to our Terms of Service and Privacy Policy.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="h-screen bg-zinc-50 flex flex-col overflow-hidden">
       {/* Exercise Modal */}
       {showExercise && (
         <ExerciseDetector 
@@ -433,11 +614,7 @@ export default function App() {
         {currentScreen === 'home' && <HomeScreen user={user} onIncrease={() => setIsBlocked(true)} />}
         {currentScreen === 'stats' && <StatsScreen user={user} />}
         {currentScreen === 'relax' && <RelaxScreen />}
-        {currentScreen === 'profile' && <ProfileScreen user={user} onUpdate={updateUserData} onLogout={() => {
-          setToken(null);
-          localStorage.removeItem('token');
-          setCurrentScreen('auth');
-        }} />}
+        {currentScreen === 'profile' && <ProfileScreen user={user} onUpdate={updateUserData} onLogout={() => signOut(auth)} />}
       </div>
 
       {/* Navigation */}
@@ -452,63 +629,6 @@ export default function App() {
 }
 
 // Sub-components
-
-function AuthScreen({ onAuth }: { onAuth: (type: 'login' | 'signup', payload: any) => void }) {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-
-  return (
-    <div className="h-screen bg-white p-8 flex flex-col justify-center">
-      <div className="mb-12">
-        <h2 className="text-4xl font-black text-zinc-900 mb-2">{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
-        <p className="text-zinc-500 font-medium">Join the Read2Relax community.</p>
-      </div>
-
-      <div className="space-y-4">
-        {!isLogin && (
-          <input 
-            type="text" 
-            placeholder="Full Name" 
-            className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        )}
-        <input 
-          type="email" 
-          placeholder="Email Address" 
-          className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <input 
-          type="password" 
-          placeholder="Password" 
-          className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button 
-          onClick={() => onAuth(isLogin ? 'login' : 'signup', { name, email, password })}
-          className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-100 mt-4"
-        >
-          {isLogin ? 'Login' : 'Sign Up'}
-        </button>
-      </div>
-
-      <div className="mt-8 text-center">
-        <button 
-          onClick={() => setIsLogin(!isLogin)}
-          className="text-zinc-500 font-bold"
-        >
-          {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function HomeScreen({ user, onIncrease }: { user: User | null, onIncrease: () => void }) {
   if (!user) return null;

@@ -24,6 +24,7 @@ export const QUOTES = [
 
 export interface User {
   id: number;
+  uid: string;
   name: string;
   email: string;
   profile_photo: string | null;
