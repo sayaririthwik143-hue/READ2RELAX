@@ -41,6 +41,7 @@ export default function App() {
   const [gender, setGender] = useState<'man' | 'woman' | null>(null);
   const [limit, setLimit] = useState(30);
   const [isBlocked, setIsBlocked] = useState(false);
+  const [cameraGranted, setCameraGranted] = useState(false);
 
   // Auth Logic
   useEffect(() => {
@@ -129,8 +130,10 @@ export default function App() {
   // Exercise Completion
   const onExerciseComplete = (minutes: number) => {
     if (user) {
+      // Add earned minutes to the limit and reduce usage
       updateUserData({
         exercise_minutes_earned: user.exercise_minutes_earned + minutes,
+        screen_time_limit: user.screen_time_limit + minutes,
         daily_usage: Math.max(0, user.daily_usage - minutes)
       });
     }
@@ -175,8 +178,6 @@ export default function App() {
   }
 
   if (currentScreen === 'permissions') {
-    const [cameraGranted, setCameraGranted] = useState(false);
-
     const requestCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -189,13 +190,10 @@ export default function App() {
 
     const handleContinue = () => {
       if (!cameraGranted) {
-        const proceed = window.confirm("Camera access is strictly required for this app to detect exercises. Please grant permission to continue. Proceed anyway for preview purposes?");
-        if (proceed) {
-          setCurrentScreen('gender-selection');
-        }
-      } else {
-        setCurrentScreen('gender-selection');
+        alert("Camera access is MANDATORY for this app to detect exercises and unlock time. Please tap the Camera Access card above to grant permission.");
+        return;
       }
+      setCurrentScreen('gender-selection');
     };
 
     return (
@@ -395,30 +393,28 @@ export default function App() {
               Your screen time is finished. Complete an activity to unlock more minutes.
             </p>
             <div className="w-full space-y-4">
-              {(!user?.gender || user?.gender === 'man') && (
-                <button 
-                  onClick={() => setShowExercise('pushups')}
-                  className={cn(
-                    "w-full py-4 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-2 transition-all",
-                    user?.gender === 'man' ? "bg-blue-600 text-white scale-105" : "bg-zinc-900 text-white"
-                  )}
-                >
-                  <Flame size={20} />
-                  Do Push-ups {user?.gender === 'man' && "(Recommended)"}
-                </button>
-              )}
-              {(!user?.gender || user?.gender === 'woman') && (
-                <button 
-                  onClick={() => setShowExercise('situps')}
-                  className={cn(
-                    "w-full py-4 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-2 transition-all",
-                    user?.gender === 'woman' ? "bg-blue-600 text-white scale-105" : "bg-zinc-900 text-white"
-                  )}
-                >
-                  <Smartphone size={20} />
-                  Do Sit-ups {user?.gender === 'woman' && "(Recommended)"}
-                </button>
-              )}
+              <button 
+                onClick={() => setShowExercise('pushups')}
+                className={cn(
+                  "w-full py-4 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-2 transition-all",
+                  user?.gender === 'man' ? "bg-blue-600 text-white scale-105" : "bg-zinc-900 text-white"
+                )}
+              >
+                <Flame size={20} />
+                Do Push-ups {user?.gender === 'man' && "(Recommended)"}
+              </button>
+              
+              <button 
+                onClick={() => setShowExercise('situps')}
+                className={cn(
+                  "w-full py-4 rounded-2xl font-bold shadow-xl flex items-center justify-center gap-2 transition-all",
+                  user?.gender === 'woman' ? "bg-blue-600 text-white scale-105" : "bg-zinc-900 text-white"
+                )}
+              >
+                <Smartphone size={20} />
+                Do Sit-ups {user?.gender === 'woman' && "(Recommended)"}
+              </button>
+
               {user && user.daily_usage < user.screen_time_limit && (
                 <button 
                   onClick={() => setIsBlocked(false)}
@@ -801,9 +797,20 @@ function ProfileScreen({ user, onLogout, onUpdate }: { user: User | null, onLogo
         </button>
       </div>
 
-      <footer className="pt-8 text-center">
-        <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest">FOUNDER & MADE BY READ2RELAX IS</p>
-        <p className="text-zinc-900 font-black text-lg">SAYARI RITHWIK</p>
+      <footer className="pt-12 pb-8 text-center space-y-4">
+        <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-zinc-200 to-transparent mb-6" />
+        <p className="text-zinc-400 text-[10px] font-black uppercase tracking-[0.3em] mb-2">
+          Founder & Made By
+        </p>
+        <div className="relative inline-block">
+          <h2 className="text-3xl font-black text-zinc-900 tracking-tighter italic">
+            SAYARI RITHWIK
+          </h2>
+          <div className="absolute -bottom-1 left-0 w-full h-1 bg-blue-600 rounded-full opacity-20" />
+        </div>
+        <p className="text-zinc-300 text-[8px] font-bold uppercase tracking-widest pt-4">
+          © 2026 Read2Relax • All Rights Reserved
+        </p>
       </footer>
     </div>
   );

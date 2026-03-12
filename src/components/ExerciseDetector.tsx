@@ -53,27 +53,42 @@ export const ExerciseDetector: React.FC<ExerciseDetectorProps> = ({ type, onComp
 
         const landmarks = results.poseLandmarks;
         const leftShoulder = landmarks[11];
+        const rightShoulder = landmarks[12];
+        const leftElbow = landmarks[13];
+        const leftWrist = landmarks[15];
+        const leftHip = landmarks[23];
         const leftKnee = landmarks[25];
 
+        // Average shoulder height for more stability
+        const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+
         if (type === 'pushups') {
-          if (leftShoulder.y > 0.7) {
+          // Push-up logic: Shoulder goes down then up
+          // We can also use the elbow angle if visible, but shoulder Y is more reliable for full body
+          if (avgShoulderY > 0.75) { // Down position
             if (statusRef.current !== 'down') {
               statusRef.current = 'down';
               setStatus('down');
             }
-          } else if (leftShoulder.y < 0.5 && statusRef.current === 'down') {
+          } else if (avgShoulderY < 0.55 && statusRef.current === 'down') { // Up position
             statusRef.current = 'up';
             setStatus('up');
             setCount(prev => prev + 1);
           }
         } else {
-          const dist = Math.sqrt(Math.pow(leftShoulder.x - leftKnee.x, 2) + Math.pow(leftShoulder.y - leftKnee.y, 2));
-          if (dist < 0.2) {
+          // Sit-up logic: Distance between shoulder and knee
+          const dist = Math.sqrt(
+            Math.pow(leftShoulder.x - leftKnee.x, 2) + 
+            Math.pow(leftShoulder.y - leftKnee.y, 2)
+          );
+          
+          // Using a more sensitive threshold for sit-ups
+          if (dist < 0.25) { // Crunch/Up position for sit-up
             if (statusRef.current !== 'down') {
               statusRef.current = 'down';
               setStatus('down');
             }
-          } else if (dist > 0.4 && statusRef.current === 'down') {
+          } else if (dist > 0.45 && statusRef.current === 'down') { // Back/Down position for sit-up
             statusRef.current = 'up';
             setStatus('up');
             setCount(prev => prev + 1);
