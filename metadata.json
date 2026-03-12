@@ -1,0 +1,8 @@
+{
+  "name": "Read2Relax",
+  "description": "A student-focused app to reduce screen time through healthy habits and AI-powered exercise rewards.",
+  "requestFramePermissions": [
+    "camera",
+    "notifications"
+  ]
+}
