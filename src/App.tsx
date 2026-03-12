@@ -40,6 +40,9 @@ import {
   setDoc, 
   updateDoc, 
   onSnapshot,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
   type FirebaseUser
 } from './firebase';
 
@@ -194,9 +197,9 @@ function AppContent() {
       const timer = setTimeout(() => {
         if (isAuthReady) {
           if (auth.currentUser) {
-            setCurrentScreen('home');
+            // Check if user has a profile in syncUserData
           } else {
-            setCurrentScreen('permissions');
+            setCurrentScreen('auth');
           }
         }
       }, 2500);
@@ -520,31 +523,28 @@ function AppContent() {
     );
   }
 
-    if (currentScreen === 'auth') {
-      return (
-        <div className="h-screen bg-white p-8 flex flex-col justify-center items-center text-center">
-          <div className="mb-12">
-            <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-100 mb-6 mx-auto">
-              <Smartphone className="text-white w-10 h-10" />
-            </div>
-            <h2 className="text-4xl font-black text-zinc-900 mb-2">Welcome</h2>
-            <p className="text-zinc-500 font-medium">Join the Read2Relax community.</p>
-          </div>
-
-          <button 
-            onClick={handleGoogleLogin}
-            className="w-full flex items-center justify-center gap-4 bg-white border-2 border-zinc-100 p-4 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm"
-          >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
-            Continue with Google
-          </button>
-
-          <p className="mt-8 text-zinc-400 text-xs font-medium px-8 leading-relaxed">
-            By continuing, you agree to our Terms of Service and Privacy Policy.
-          </p>
-        </div>
-      );
-    }
+  if (currentScreen === 'auth') {
+    return (
+      <AuthScreen 
+        onGoogleLogin={handleGoogleLogin} 
+        onEmailLogin={async (email, password) => {
+          try {
+            await signInWithEmailAndPassword(auth, email, password);
+          } catch (err: any) {
+            alert(err.message);
+          }
+        }}
+        onEmailSignup={async (email, password, name) => {
+          try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            await updateProfile(userCredential.user, { displayName: name });
+          } catch (err: any) {
+            alert(err.message);
+          }
+        }}
+      />
+    );
+  }
 
     return (
       <div className="h-screen bg-zinc-50 flex flex-col overflow-hidden">
@@ -629,6 +629,88 @@ function AppContent() {
 }
 
 // Sub-components
+
+function AuthScreen({ 
+  onGoogleLogin, 
+  onEmailLogin, 
+  onEmailSignup 
+}: { 
+  onGoogleLogin: () => void, 
+  onEmailLogin: (e: string, p: string) => void,
+  onEmailSignup: (e: string, p: string, n: string) => void
+}) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+
+  return (
+    <div className="h-screen bg-white p-8 flex flex-col justify-center">
+      <div className="mb-12 text-center">
+        <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-100 mb-6 mx-auto">
+          <Smartphone className="text-white w-10 h-10" />
+        </div>
+        <h2 className="text-4xl font-black text-zinc-900 mb-2">{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
+        <p className="text-zinc-500 font-medium">Join the Read2Relax community.</p>
+      </div>
+
+      <div className="space-y-4">
+        {!isLogin && (
+          <input 
+            type="text" 
+            placeholder="Full Name" 
+            className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        )}
+        <input 
+          type="email" 
+          placeholder="Email Address" 
+          className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input 
+          type="password" 
+          placeholder="Password" 
+          className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <button 
+          onClick={() => isLogin ? onEmailLogin(email, password) : onEmailSignup(email, password, name)}
+          className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-100 mt-4"
+        >
+          {isLogin ? 'Login' : 'Sign Up'}
+        </button>
+
+        <div className="flex items-center gap-4 my-6">
+          <div className="flex-1 h-[1px] bg-zinc-100" />
+          <span className="text-zinc-400 text-xs font-bold uppercase">OR</span>
+          <div className="flex-1 h-[1px] bg-zinc-100" />
+        </div>
+
+        <button 
+          onClick={onGoogleLogin}
+          className="w-full flex items-center justify-center gap-4 bg-white border-2 border-zinc-100 p-4 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm"
+        >
+          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
+          Continue with Google
+        </button>
+      </div>
+
+      <div className="mt-8 text-center">
+        <button 
+          onClick={() => setIsLogin(!isLogin)}
+          className="text-zinc-500 font-bold"
+        >
+          {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function HomeScreen({ user, onIncrease }: { user: User | null, onIncrease: () => void }) {
   if (!user) return null;
