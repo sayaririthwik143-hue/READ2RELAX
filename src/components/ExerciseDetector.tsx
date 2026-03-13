@@ -17,7 +17,16 @@ export const ExerciseDetector: React.FC<ExerciseDetectorProps> = ({ type, onComp
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [count, setCount] = useState(0);
   const [status, setStatus] = useState<'down' | 'up'>('up');
+  const [feedback, setFeedback] = useState<string>('Get ready!');
   const [isReady, setIsReady] = useState(false);
+
+  // Helper to calculate angle between three points
+  const calculateAngle = (a: any, b: any, c: any) => {
+    const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+    let angle = Math.abs((radians * 180.0) / Math.PI);
+    if (angle > 180.0) angle = 360 - angle;
+    return angle;
+  };
 
   useEffect(() => {
     const pose = new Pose({
@@ -33,7 +42,11 @@ export const ExerciseDetector: React.FC<ExerciseDetectorProps> = ({ type, onComp
     });
 
     // Use a ref to store the current status to avoid re-running the effect
-    const statusRef = { current: status };
+    const stateRef = { 
+      status: status,
+      lastAngle: 0,
+      formValid: true
+    };
     
     pose.onResults((results: Results) => {
       const canvas = canvasRef.current;
@@ -52,46 +65,72 @@ export const ExerciseDetector: React.FC<ExerciseDetectorProps> = ({ type, onComp
         drawLandmarks(canvasCtx, results.poseLandmarks, { color: '#FF0000', lineWidth: 2 });
 
         const landmarks = results.poseLandmarks;
-        const leftShoulder = landmarks[11];
-        const rightShoulder = landmarks[12];
-        const leftElbow = landmarks[13];
-        const leftWrist = landmarks[15];
-        const leftHip = landmarks[23];
-        const leftKnee = landmarks[25];
-
-        // Average shoulder height for more stability
-        const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+        
+        // Key landmarks
+        const lShoulder = landmarks[11];
+        const lElbow = landmarks[13];
+        const lWrist = landmarks[15];
+        const lHip = landmarks[23];
+        const lKnee = landmarks[25];
+        const lAnkle = landmarks[27];
 
         if (type === 'pushups') {
-          // Push-up logic: Shoulder goes down then up
-          // We can also use the elbow angle if visible, but shoulder Y is more reliable for full body
-          if (avgShoulderY > 0.75) { // Down position
-            if (statusRef.current !== 'down') {
-              statusRef.current = 'down';
-              setStatus('down');
+          // Push-up logic using elbow angle and body alignment
+          const elbowAngle = calculateAngle(lShoulder, lElbow, lWrist);
+          const hipAngle = calculateAngle(lShoulder, lHip, lKnee);
+          
+          // Form validation: Back should be relatively straight
+          const isBackStraight = hipAngle > 150;
+          
+          if (!isBackStraight) {
+            setFeedback('Keep your back straight!');
+            stateRef.formValid = false;
+          } else {
+            stateRef.formValid = true;
+            
+            if (elbowAngle < 90) { // Down position
+              if (stateRef.status !== 'down') {
+                stateRef.status = 'down';
+                setStatus('down');
+                setFeedback('Now push up!');
+              }
+            } else if (elbowAngle > 160 && stateRef.status === 'down') { // Up position
+              stateRef.status = 'up';
+              setStatus('up');
+              setCount(prev => prev + 1);
+              setFeedback('Great rep! Go down again.');
+            } else if (stateRef.status === 'up') {
+              setFeedback('Lower your chest...');
             }
-          } else if (avgShoulderY < 0.55 && statusRef.current === 'down') { // Up position
-            statusRef.current = 'up';
-            setStatus('up');
-            setCount(prev => prev + 1);
           }
         } else {
-          // Sit-up logic: Distance between shoulder and knee
-          const dist = Math.sqrt(
-            Math.pow(leftShoulder.x - leftKnee.x, 2) + 
-            Math.pow(leftShoulder.y - leftKnee.y, 2)
-          );
+          // Sit-up logic using hip angle and knee position
+          const hipAngle = calculateAngle(lShoulder, lHip, lKnee);
+          const kneeAngle = calculateAngle(lHip, lKnee, lAnkle);
           
-          // Using a more sensitive threshold for sit-ups
-          if (dist < 0.25) { // Crunch/Up position for sit-up
-            if (statusRef.current !== 'down') {
-              statusRef.current = 'down';
+          // Form validation: Knees should be bent
+          const areKneesBent = kneeAngle < 130;
+          
+          if (!areKneesBent) {
+            setFeedback('Bend your knees!');
+            stateRef.formValid = false;
+          } else {
+            stateRef.formValid = true;
+
+            if (hipAngle < 60) { // Up/Crunch position
+              if (stateRef.status !== 'up') {
+                stateRef.status = 'up';
+                setStatus('up');
+                setFeedback('Now go back down.');
+              }
+            } else if (hipAngle > 130 && stateRef.status === 'up') { // Down/Lying position
+              stateRef.status = 'down';
               setStatus('down');
+              setCount(prev => prev + 1);
+              setFeedback('Good! Crunch up again.');
+            } else if (stateRef.status === 'down') {
+              setFeedback('Crunch up!');
             }
-          } else if (dist > 0.45 && statusRef.current === 'down') { // Back/Down position for sit-up
-            statusRef.current = 'up';
-            setStatus('up');
-            setCount(prev => prev + 1);
           }
         }
       }
@@ -147,7 +186,17 @@ export const ExerciseDetector: React.FC<ExerciseDetectorProps> = ({ type, onComp
           </div>
         )}
 
-        <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center">
+        <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center gap-4">
+          {/* Feedback Message */}
+          <motion.div 
+            key={feedback}
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-lg"
+          >
+            {feedback}
+          </motion.div>
+
           <div className="bg-white/90 backdrop-blur px-6 py-3 rounded-2xl shadow-xl flex items-center gap-4">
             <div className="text-center">
               <p className="text-xs text-zinc-500 uppercase font-bold tracking-wider">{type}</p>

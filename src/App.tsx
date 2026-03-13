@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Component, useState, useEffect } from 'react';
+import React, { Component, useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   LayoutDashboard, 
@@ -28,74 +28,10 @@ import {
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { ExerciseDetector } from './components/ExerciseDetector';
 import { MOCK_APPS, QUOTES, type User, cn } from './utils';
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc, 
-  onSnapshot,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  updateProfile,
-  type FirebaseUser
-} from './firebase';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+// Mock Auth and DB using LocalStorage
+const MOCK_USER_KEY = 'read2relax_user';
+const MOCK_AUTH_KEY = 'read2relax_auth';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -175,11 +111,12 @@ function AppContent() {
 
   // Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const checkAuth = () => {
+      const authData = localStorage.getItem(MOCK_AUTH_KEY);
       setIsAuthReady(true);
-      if (firebaseUser) {
-        // User is signed in, fetch/sync their data
-        syncUserData(firebaseUser);
+      if (authData) {
+        const parsedAuth = JSON.parse(authData);
+        syncUserData(parsedAuth.uid);
       } else {
         setUser(null);
         if (currentScreen !== 'splash' && currentScreen !== 'permissions' && currentScreen !== 'gender-selection' && currentScreen !== 'app-selection') {
@@ -187,8 +124,8 @@ function AppContent() {
         }
       }
       setLoading(false);
-    });
-    return () => unsubscribe();
+    };
+    checkAuth();
   }, []);
 
   // Splash Screen Delay
@@ -196,48 +133,41 @@ function AppContent() {
     if (currentScreen === 'splash') {
       const timer = setTimeout(() => {
         if (isAuthReady) {
-          if (auth.currentUser) {
-            // Check if user has a profile in syncUserData
+          const authData = localStorage.getItem(MOCK_AUTH_KEY);
+          if (authData) {
+            if (user) {
+              setCurrentScreen('home');
+            }
           } else {
             setCurrentScreen('auth');
           }
         }
-      }, 2500);
+      }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [isAuthReady, currentScreen]);
+  }, [isAuthReady, currentScreen, user]);
 
-  // Sync User Data with Firestore
-  const syncUserData = (firebaseUser: FirebaseUser) => {
-    const userDocRef = doc(db, 'users', firebaseUser.uid);
-    
-    // Set up real-time listener
-    const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as User;
-        setUser(data);
-        try {
-          setSelectedApps(JSON.parse(data.selected_apps));
-        } catch (e) {
-          setSelectedApps([]);
-        }
-        setLimit(data.screen_time_limit);
-        
-        // If we are on onboarding screens, move to home
-        if (['auth', 'permissions', 'gender-selection', 'app-selection'].includes(currentScreen)) {
-          setCurrentScreen('home');
-        }
-      } else {
-        // New user, we'll handle creation after onboarding
-        if (currentScreen === 'splash' || currentScreen === 'auth') {
-          setCurrentScreen('permissions');
-        }
+  // Sync User Data with LocalStorage
+  const syncUserData = (uid: string) => {
+    const userData = localStorage.getItem(MOCK_USER_KEY);
+    if (userData) {
+      const data = JSON.parse(userData) as User;
+      setUser(data);
+      try {
+        setSelectedApps(JSON.parse(data.selected_apps));
+      } catch (e) {
+        setSelectedApps([]);
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
-    });
-
-    return unsubscribe;
+      setLimit(data.screen_time_limit);
+      
+      if (['splash', 'auth', 'permissions', 'gender-selection', 'app-selection'].includes(currentScreen)) {
+        setCurrentScreen('home');
+      }
+    } else {
+      if (currentScreen === 'splash' || currentScreen === 'auth') {
+        setCurrentScreen('permissions');
+      }
+    }
   };
 
   // Automatic Blocking
@@ -247,13 +177,20 @@ function AppContent() {
     }
   }, [user?.daily_usage, user?.screen_time_limit]);
 
-  const handleGoogleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to sign in with Google.");
+  const handleMockLogin = async (email: string, password: string) => {
+    if (email && password) {
+      const uid = 'mock-uid-123';
+      localStorage.setItem(MOCK_AUTH_KEY, JSON.stringify({ uid, email }));
+      syncUserData(uid);
+    } else {
+      alert("Please enter email and password.");
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(MOCK_AUTH_KEY);
+    setUser(null);
+    setCurrentScreen('auth');
   };
 
   const handleOnboardingContinue = () => {
@@ -265,46 +202,42 @@ function AppContent() {
   };
 
   const finalizeOnboarding = async () => {
-    if (!auth.currentUser) {
+    const authData = localStorage.getItem(MOCK_AUTH_KEY);
+    if (!authData) {
       setCurrentScreen('auth');
       return;
     }
+    const { uid, email } = JSON.parse(authData);
     
     const newUser: User = {
-      id: 0, // Not used with Firebase
-      uid: auth.currentUser.uid,
-      name: auth.currentUser.displayName || 'User',
-      email: auth.currentUser.email || '',
-      profile_photo: auth.currentUser.photoURL || null,
-      selected_apps: JSON.stringify(selectedApps),
+      id: Date.now(),
+      uid,
+      name: email.split('@')[0],
+      email: email,
+      profile_photo: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+      gender: gender as 'man' | 'woman',
       screen_time_limit: limit,
-      exercise_minutes_earned: 0,
       daily_usage: 0,
+      exercise_minutes_earned: 0,
       focus_score: 100,
-      gender: gender,
+      selected_apps: JSON.stringify(selectedApps)
     };
 
-    try {
-      await setDoc(doc(db, 'users', auth.currentUser.uid), newUser);
-      setCurrentScreen('home');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${auth.currentUser.uid}`);
-    }
+    localStorage.setItem(MOCK_USER_KEY, JSON.stringify(newUser));
+    setUser(newUser);
+    setCurrentScreen('home');
   };
 
   const updateUserData = async (updates: Partial<User>) => {
-    if (!auth.currentUser) return;
-    
-    try {
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
-    }
+    if (!user) return;
+    const updatedUser = { ...user, ...updates };
+    localStorage.setItem(MOCK_USER_KEY, JSON.stringify(updatedUser));
+    setUser(updatedUser);
   };
 
   // Exercise Completion
   const onExerciseComplete = (minutes: number) => {
-    if (user && auth.currentUser) {
+    if (user) {
       updateUserData({
         exercise_minutes_earned: user.exercise_minutes_earned + minutes,
         screen_time_limit: user.screen_time_limit + minutes,
@@ -517,7 +450,7 @@ function AppContent() {
           onClick={finalizeOnboarding}
           className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl mt-6"
         >
-          {auth.currentUser ? "Complete Setup" : "Continue to Login"}
+          {localStorage.getItem(MOCK_AUTH_KEY) ? "Complete Setup" : "Continue to Login"}
         </button>
       </div>
     );
@@ -526,22 +459,7 @@ function AppContent() {
   if (currentScreen === 'auth') {
     return (
       <AuthScreen 
-        onGoogleLogin={handleGoogleLogin} 
-        onEmailLogin={async (email, password) => {
-          try {
-            await signInWithEmailAndPassword(auth, email, password);
-          } catch (err: any) {
-            alert(err.message);
-          }
-        }}
-        onEmailSignup={async (email, password, name) => {
-          try {
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            await updateProfile(userCredential.user, { displayName: name });
-          } catch (err: any) {
-            alert(err.message);
-          }
-        }}
+        onEmailLogin={handleMockLogin}
       />
     );
   }
@@ -614,7 +532,7 @@ function AppContent() {
         {currentScreen === 'home' && <HomeScreen user={user} onIncrease={() => setIsBlocked(true)} />}
         {currentScreen === 'stats' && <StatsScreen user={user} />}
         {currentScreen === 'relax' && <RelaxScreen />}
-        {currentScreen === 'profile' && <ProfileScreen user={user} onUpdate={updateUserData} onLogout={() => signOut(auth)} />}
+        {currentScreen === 'profile' && <ProfileScreen user={user} onUpdate={updateUserData} onLogout={handleLogout} />}
       </div>
 
       {/* Navigation */}
@@ -631,18 +549,12 @@ function AppContent() {
 // Sub-components
 
 function AuthScreen({ 
-  onGoogleLogin, 
-  onEmailLogin, 
-  onEmailSignup 
+  onEmailLogin
 }: { 
-  onGoogleLogin: () => void, 
-  onEmailLogin: (e: string, p: string) => void,
-  onEmailSignup: (e: string, p: string, n: string) => void
+  onEmailLogin: (e: string, p: string) => void
 }) {
-  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
 
   return (
     <div className="h-screen bg-white p-8 flex flex-col justify-center">
@@ -650,20 +562,11 @@ function AuthScreen({
         <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-100 mb-6 mx-auto">
           <Smartphone className="text-white w-10 h-10" />
         </div>
-        <h2 className="text-4xl font-black text-zinc-900 mb-2">{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
+        <h2 className="text-4xl font-black text-zinc-900 mb-2">Welcome Back</h2>
         <p className="text-zinc-500 font-medium">Join the Read2Relax community.</p>
       </div>
 
       <div className="space-y-4">
-        {!isLogin && (
-          <input 
-            type="text" 
-            placeholder="Full Name" 
-            className="w-full p-4 bg-zinc-50 border border-zinc-100 rounded-2xl font-medium focus:ring-2 focus:ring-blue-500 outline-none"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        )}
         <input 
           type="email" 
           placeholder="Email Address" 
@@ -679,33 +582,10 @@ function AuthScreen({
           onChange={(e) => setPassword(e.target.value)}
         />
         <button 
-          onClick={() => isLogin ? onEmailLogin(email, password) : onEmailSignup(email, password, name)}
+          onClick={() => onEmailLogin(email, password)}
           className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-100 mt-4"
         >
-          {isLogin ? 'Login' : 'Sign Up'}
-        </button>
-
-        <div className="flex items-center gap-4 my-6">
-          <div className="flex-1 h-[1px] bg-zinc-100" />
-          <span className="text-zinc-400 text-xs font-bold uppercase">OR</span>
-          <div className="flex-1 h-[1px] bg-zinc-100" />
-        </div>
-
-        <button 
-          onClick={onGoogleLogin}
-          className="w-full flex items-center justify-center gap-4 bg-white border-2 border-zinc-100 p-4 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm"
-        >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
-          Continue with Google
-        </button>
-      </div>
-
-      <div className="mt-8 text-center">
-        <button 
-          onClick={() => setIsLogin(!isLogin)}
-          className="text-zinc-500 font-bold"
-        >
-          {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
+          Login
         </button>
       </div>
     </div>
@@ -739,23 +619,56 @@ function HomeScreen({ user, onIncrease }: { user: User | null, onIncrease: () =>
         </div>
       </header>
 
-      <div id="remaining-time-card" className="bg-blue-600 p-8 rounded-[2.5rem] text-white shadow-2xl shadow-blue-200 relative overflow-hidden">
+      <div 
+        id="remaining-time-card" 
+        className={cn(
+          "p-8 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden transition-colors duration-700",
+          progress > 90 ? "bg-red-600 shadow-red-200" : 
+          progress > 70 ? "bg-orange-500 shadow-orange-200" : 
+          "bg-blue-600 shadow-blue-200"
+        )}
+      >
         <div className="relative z-10">
-          <p className="text-blue-100 font-bold uppercase tracking-wider text-xs mb-2">Remaining Time</p>
-          <h3 className="text-5xl font-black mb-6">{remaining}m</h3>
-          <div className="w-full h-3 bg-white/20 rounded-full overflow-hidden mb-4">
+          <p className="text-white/80 font-bold uppercase tracking-wider text-xs mb-2">Remaining Time</p>
+          <h3 className="text-5xl font-black mb-6 flex items-baseline gap-2">
+            {remaining}
+            <span className="text-xl font-bold opacity-60">m</span>
+          </h3>
+          <div className="w-full h-4 bg-black/10 rounded-full overflow-hidden mb-4 p-1">
             <motion.div 
               initial={{ width: 0 }}
-              animate={{ width: `${Math.min(100, progress)}%` }}
-              className="h-full bg-white"
-            />
+              animate={{ 
+                width: `${Math.min(100, progress)}%`,
+                backgroundColor: progress > 90 ? "#fff" : progress > 70 ? "#fff" : "#fff"
+              }}
+              transition={{ type: "spring", stiffness: 50, damping: 20 }}
+              className={cn(
+                "h-full rounded-full relative",
+                progress > 90 && "animate-pulse shadow-[0_0_15px_rgba(255,255,255,0.8)]"
+              )}
+              style={{ backgroundColor: 'white' }}
+            >
+              {progress > 15 && (
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
+              )}
+            </motion.div>
           </div>
-          <div className="flex justify-between text-xs font-bold text-blue-100">
-            <span>{user.daily_usage}m used</span>
+          <div className="flex justify-between text-xs font-bold text-white/80">
+            <span className="flex items-center gap-1">
+              <Clock size={12} />
+              {user.daily_usage}m used
+            </span>
             <span>{user.screen_time_limit}m limit</span>
           </div>
         </div>
-        <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-white/10 rounded-full blur-3xl" />
+        <motion.div 
+          animate={{ 
+            scale: [1, 1.2, 1],
+            opacity: [0.1, 0.2, 0.1]
+          }}
+          transition={{ duration: 4, repeat: Infinity }}
+          className="absolute -right-12 -bottom-12 w-48 h-48 bg-white rounded-full blur-3xl" 
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
